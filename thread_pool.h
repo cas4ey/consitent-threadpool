@@ -49,10 +49,14 @@ public:
         m_threads.reserve(threadsCount);
 
         // N threads for main tasks
-        size_t counter = 0;
-        std::generate_n(std::back_inserter(m_threads), threadsCount, [this, &counter] {
-            return Thread(std::thread(&ThreadPool::worker, this, ++counter));
-        });
+        //size_t counter = 0;
+        //std::generate_n(std::back_inserter(m_threads), threadsCount, [this, &counter] {
+        //    return std::thread {&ThreadPool::worker, this, ++counter};
+        //});
+        for (size_t i = 0; i < threadsCount; ++i)
+        {
+            m_threads.emplace_back(&ThreadPool::worker, this, i);
+        }
 
         m_lastActiveThread = threadsCount;
         m_started = true;
