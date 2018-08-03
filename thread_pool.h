@@ -60,7 +60,7 @@ public:
         // N threads for main tasks
         size_t counter = 0;
         std::generate_n(std::back_inserter(m_threads), threadsCount, [this, &counter] {
-            return std::thread {&ThreadPool::worker, this, ++counter};
+            return std::thread {&ThreadPool::worker, this, counter++};
         });
 
         m_lastActiveThread = threadsCount;
@@ -76,13 +76,13 @@ public:
         }
     }
 
-    void execute(Task task, std::string key)
+    void execute(const std::string& key, Task task)
     {
         // Consistent key
-        execute(std::move(task), std::hash<std::string>()(key));
+        execute(std::hash<std::string>()(key), std::move(task));
     }
 
-    void execute(Task task, size_t key)
+    void execute(size_t key, Task task)
     {
         // Consistent key
         auto const threadIndex = key % m_threads.size();
