@@ -28,13 +28,22 @@ class ThreadPool final
         std::thread             thread;
         std::atomic<int64_t>    jobsCount {0};
 
-        Thread(std::thread t) : thread(std::move(t)) {}
+        Thread(std::thread t) noexcept
+            : thread(std::move(t))
+        {
+        }
+
+        Thread(Thread&& t) noexcept
+            : jobs(std::move(t.jobs))
+            , thread(std::move(t.thread))
+        {
+            jobsCount = t.jobsCount.load();
+        }
     };
 
     std::vector<Thread> m_threads;
     std::atomic<size_t> m_lastActiveThread {0};
-    std::atomic_bool    m_started {false};
-    std::atomic_bool    m_interrupt {false};
+    std::atomic<char>   m_state {0};
 
 public:
     ThreadPool() : ThreadPool(0)
@@ -49,22 +58,18 @@ public:
         m_threads.reserve(threadsCount);
 
         // N threads for main tasks
-        //size_t counter = 0;
-        //std::generate_n(std::back_inserter(m_threads), threadsCount, [this, &counter] {
-        //    return std::thread {&ThreadPool::worker, this, ++counter};
-        //});
-        for (size_t i = 0; i < threadsCount; ++i)
-        {
-            m_threads.emplace_back(&ThreadPool::worker, this, i);
-        }
+        size_t counter = 0;
+        std::generate_n(std::back_inserter(m_threads), threadsCount, [this, &counter] {
+            return std::thread {&ThreadPool::worker, this, ++counter};
+        });
 
         m_lastActiveThread = threadsCount;
-        m_started = true;
+        setInitialized();
     }
 
     ~ThreadPool()
     {
-        m_interrupt = true;
+        interrupt();
         for (auto& thread : m_threads)
         {
             thread.thread.join();
@@ -94,6 +99,31 @@ public:
     }
 
 private:
+    bool isInitialized() const noexcept
+    {
+        return m_state != 0;
+    }
+
+    bool isInterrupted() const noexcept
+    {
+        return m_state < 0;
+    }
+
+    bool isAlive() const noexcept
+    {
+        return m_state > 0;
+    }
+
+    void setInitialized() noexcept
+    {
+        m_state = 1;
+    }
+
+    void interrupt() noexcept
+    {
+        m_state = -1;
+    }
+
     void addJob(Task task, size_t index)
     {
         auto& thread = m_threads[index];
@@ -108,7 +138,7 @@ private:
 
     void worker(size_t threadIndex)
     {
-        while (!m_started)
+        while (!isInitialized())
         {
             // Wait until m_threads will be filled
             std::this_thread::yield();
@@ -116,17 +146,17 @@ private:
 
         auto& thread = m_threads[threadIndex];
 
-        while (!m_interrupt)
+        while (isAlive())
         {
             // Wait for condition_variable
             std::unique_lock<std::mutex> lock(thread.mutex);
             thread.cv.wait(lock, [this, &thread] {
-                return thread.jobsCount > 0 || m_interrupt;
+                return thread.jobsCount > 0 || isInterrupted();
             });
             lock.unlock();
 
             int triesCount = 0; // After 3 tries stop recheduling the thread and wait for condition_variable
-            while (!m_interrupt && ++triesCount < 4)
+            while (isAlive() && ++triesCount < 4)
             {
                 if (thread.jobsCount < 1)
                 {
@@ -152,7 +182,7 @@ private:
                 lock.unlock();
 
                 triesCount = 0;
-                if (m_interrupt)
+                if (isInterrupted())
                     break;
 
                 // Execute the task
